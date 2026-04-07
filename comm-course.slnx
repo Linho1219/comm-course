@@ -1,4 +1,6 @@
 <Solution>
   <Project Path="1-convert-case-client/1-convert-case-client.csproj" Id="33ab6101-2067-4ab8-87dd-2c6e66a0a893" />
   <Project Path="1-convert-case-server/1-convert-case-server.csproj" Id="82653c26-1238-4c22-a148-d3b584b074d5" />
+  <Project Path="2-filesend-client/2-filesend-client.csproj" Id="b9cff77a-f201-4500-acd9-c98bff3b7931" />
+  <Project Path="2-filesend-server/2-filesend-server.csproj" Id="c9f23ff9-93d3-4e80-93a9-51de846494d4" />
 </Solution>
