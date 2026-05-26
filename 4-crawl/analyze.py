@@ -11,7 +11,6 @@ from typing import Iterable
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib import font_manager
-from matplotlib.ticker import PercentFormatter
 
 
 ROOT = Path(__file__).resolve().parent
@@ -26,7 +25,22 @@ DETAIL_OUTPUT_FILES = [
     "course_rankings.csv",
     "top_rated_courses.csv",
     "keyword_frequency.csv",
+    "teacher_stats.csv",
 ]
+STALE_FIGURE_FILES = [
+    "rating_distribution.png",
+    "semester_trend.png",
+]
+STALE_FIGURE_PATTERNS = [
+    "department_review_count_top*.png",
+]
+RATING_COLORS = {
+    1: "#B64D4D",
+    2: "#D9825B",
+    3: "#E6C35C",
+    4: "#7BAE78",
+    5: "#3C8D6A",
+}
 
 STOPWORDS = {
     "一个",
@@ -317,6 +331,21 @@ def build_course_stats(ratings_df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def build_teacher_stats(ratings_df: pd.DataFrame) -> pd.DataFrame:
+    return (
+        ratings_df.groupby("teacher", dropna=False)
+        .agg(
+            review_count=("review_id", "count"),
+            avg_review_rating=("rating", "mean"),
+            median_review_rating=("rating", "median"),
+            reviewed_courses=("course_id", "nunique"),
+            departments=("department", lambda values: "、".join(sorted(set(map(str, values)))[:3])),
+        )
+        .reset_index()
+        .sort_values(["review_count", "avg_review_rating"], ascending=[False, False])
+    )
+
+
 def tokenize_comments(comments: Iterable[str]) -> Counter[str]:
     text = "\n".join(comment for comment in comments if isinstance(comment, str))
     text = TEMPLATE_LABEL_RE.sub(" ", text)
@@ -406,80 +435,126 @@ def save_barh(
     plt.close(fig)
 
 
-def save_rating_distribution(ratings_df: pd.DataFrame, path: Path) -> None:
-    plot_df = ratings_df.dropna(subset=["semester", "rating"]).copy()
+def rating_count_table(
+    ratings_df: pd.DataFrame,
+    index_col: str,
+    index_order: list[str],
+) -> pd.DataFrame:
+    plot_df = ratings_df.dropna(subset=[index_col, "rating"]).copy()
+    plot_df[index_col] = plot_df[index_col].astype(str)
     plot_df["rating"] = plot_df["rating"].astype(int)
-    semesters = ordered_semesters(plot_df["semester"])
-    rating_values = sorted(plot_df["rating"].unique())
-
-    counts = pd.crosstab(plot_df["semester"], plot_df["rating"]).reindex(
-        index=semesters,
+    rating_values = [rating for rating in range(1, 6) if rating in set(plot_df["rating"])]
+    return pd.crosstab(plot_df[index_col], plot_df["rating"]).reindex(
+        index=index_order,
         columns=rating_values,
         fill_value=0,
     )
-    proportions = counts.div(counts.sum(axis=1), axis=0).fillna(0) * 100
-    labels = [f"{semester}\n(n={int(counts.loc[semester].sum())})" for semester in semesters]
 
-    colors = {
-        1: "#B64D4D",
-        2: "#D9825B",
-        3: "#E6C35C",
-        4: "#7BAE78",
-        5: "#3C8D6A",
-    }
-    fig_width = max(9, len(semesters) * 1.05)
-    fig, ax = plt.subplots(figsize=(fig_width, 5.2))
-    bottom = pd.Series([0.0] * len(proportions), index=proportions.index)
 
-    for rating in rating_values:
-        values = proportions[rating]
-        bars = ax.bar(
+def save_semester_rating_stack(ratings_df: pd.DataFrame, path: Path) -> None:
+    semesters = ordered_semesters(ratings_df["semester"])
+    counts = rating_count_table(ratings_df, "semester", semesters)
+    labels = semesters
+    totals = counts.sum(axis=1)
+
+    fig_width = max(10, len(semesters) * 1.1)
+    fig, ax = plt.subplots(figsize=(fig_width, 5.8))
+    bottom = pd.Series([0] * len(counts), index=counts.index)
+
+    for rating in counts.columns:
+        values = counts[rating]
+        ax.bar(
             labels,
             values,
             bottom=bottom,
             label=f"{rating} 星",
-            color=colors.get(rating, None),
+            color=RATING_COLORS.get(rating),
             width=0.72,
         )
-        for bar, value, base in zip(bars, values, bottom):
-            if value >= 8:
-                ax.text(
-                    bar.get_x() + bar.get_width() / 2,
-                    base + value / 2,
-                    f"{value:.0f}%",
-                    ha="center",
-                    va="center",
-                    fontsize=8,
-                    color="#222222",
-                )
         bottom += values
 
-    ax.set_title("各学期评价星级结构")
+    for idx, total in enumerate(totals):
+        ax.text(idx, total + max(totals.max() * 0.015, 8), f"{int(total)}", ha="center", va="bottom", fontsize=8)
+
+    ax.set_title("各学期评价数量与星级结构")
     ax.set_xlabel("学期")
-    ax.set_ylabel("比例")
-    ax.set_ylim(0, 100)
-    ax.yaxis.set_major_formatter(PercentFormatter(xmax=100, decimals=0))
+    ax.set_ylabel("评价数量")
+    ax.set_ylim(0, totals.max() * 1.14)
     ax.grid(axis="y", alpha=0.25)
+    ax.tick_params(axis="x", rotation=45)
+    for label in ax.get_xticklabels():
+        label.set_horizontalalignment("right")
     ax.legend(title="评分", loc="upper left", bbox_to_anchor=(1.01, 1))
     fig.tight_layout()
     fig.savefig(path, dpi=180)
     plt.close(fig)
 
 
-def save_semester_trend(semester_df: pd.DataFrame, path: Path) -> None:
-    order = ordered_semesters(semester_df["semester"])
-    trend = semester_df.set_index("semester").loc[order].reset_index()
-    fig, ax1 = plt.subplots(figsize=(10, 4.8))
-    ax1.bar(trend["semester"], trend["review_count"], color="#4C78A8", alpha=0.85)
-    ax1.set_ylabel("评价数量")
-    ax1.tick_params(axis="x", rotation=30)
-    ax1.grid(axis="y", alpha=0.2)
+def save_group_rating_stack(
+    ratings_df: pd.DataFrame,
+    group_col: str,
+    title: str,
+    path: Path,
+    top_n: int,
+    group_order: list[str] | None = None,
+    label_map: dict[str, str] | None = None,
+) -> None:
+    plot_df = ratings_df.dropna(subset=[group_col, "rating"]).copy()
+    plot_df[group_col] = plot_df[group_col].astype(str)
 
-    ax2 = ax1.twinx()
-    ax2.plot(trend["semester"], trend["avg_review_rating"], color="#F58518", marker="o")
-    ax2.set_ylabel("平均评分")
-    ax2.set_ylim(0, 5.2)
-    ax1.set_title("各学期评价数量与平均评分")
+    if group_order is None:
+        group_order = (
+            plot_df.groupby(group_col)["review_id"]
+            .count()
+            .sort_values(ascending=False)
+            .head(top_n)
+            .index.tolist()
+        )
+    else:
+        group_order = group_order[:top_n]
+
+    group_order = [group for group in group_order if group and group != "nan"]
+    groups = list(reversed(group_order))
+    counts = rating_count_table(plot_df, group_col, groups)
+    counts = counts[counts.sum(axis=1) > 0]
+    y_labels = [label_map.get(group, group) if label_map else group for group in counts.index]
+    y_positions = list(range(len(counts)))
+
+    row_height = 0.46 if any("\n" in label for label in y_labels) else 0.36
+    height = max(5.5, len(counts) * row_height)
+    fig, ax = plt.subplots(figsize=(10.5, height))
+    left = pd.Series([0] * len(counts), index=counts.index)
+
+    for rating in counts.columns:
+        values = counts[rating]
+        ax.barh(
+            y_positions,
+            values,
+            left=left,
+            label=f"{rating} 星",
+            color=RATING_COLORS.get(rating),
+            height=0.72,
+        )
+        left += values
+
+    totals = counts.sum(axis=1)
+    for idx, total in enumerate(totals):
+        ax.annotate(
+            f"{int(total)}",
+            xy=(total, idx),
+            xytext=(3, 0),
+            textcoords="offset points",
+            va="center",
+            ha="left",
+            fontsize=8,
+        )
+
+    ax.set_title(title)
+    ax.set_xlabel("评价数量")
+    ax.set_yticks(y_positions, y_labels, fontsize=8)
+    ax.grid(axis="x", alpha=0.25)
+    ax.set_xlim(0, totals.max() * 1.08)
+    ax.legend(title="评分", loc="lower right")
     fig.tight_layout()
     fig.savefig(path, dpi=180)
     plt.close(fig)
@@ -515,6 +590,7 @@ def write_markdown_report(
     category_df: pd.DataFrame,
     semester_df: pd.DataFrame,
     course_df: pd.DataFrame,
+    teacher_df: pd.DataFrame,
     keywords: Counter[str],
     wordcloud_created: bool,
     write_details: bool,
@@ -543,12 +619,13 @@ def write_markdown_report(
 - `category_stats.csv`：按课程类别聚合的评价数量与平均分
 - `semester_stats.csv`：按学期聚合的评价数量与平均分
 - `course_rankings.csv`：按课程聚合的评价数量与平均分
+- `teacher_stats.csv`：按教师聚合的评价数量与平均分
 - `keyword_frequency.csv`：评论分词后的高频词
-- `department_review_count_top{summary["department_top_n"]}.png`、`department_average_rating_top{summary["department_top_n"]}.png`、`semester_trend.png`、`rating_distribution.png`：统计图，其中 `rating_distribution.png` 是按学期的星级比例堆积图
+- `department_review_rating_stack_top{summary["department_top_n"]}.png`、`teacher_review_rating_stack_top{summary["teacher_top_n"]}.png`、`department_average_rating_top{summary["department_top_n"]}.png`、`semester_rating_stack.png`：统计图
 """
     else:
         output_files = f"""- `report.md`：面向作业报告的文字版摘要
-- `department_review_count_top{summary["department_top_n"]}.png`、`department_average_rating_top{summary["department_top_n"]}.png`、`semester_trend.png`、`rating_distribution.png`：统计图，其中 `rating_distribution.png` 是按学期的星级比例堆积图
+- `department_review_rating_stack_top{summary["department_top_n"]}.png`、`teacher_review_rating_stack_top{summary["teacher_top_n"]}.png`、`department_average_rating_top{summary["department_top_n"]}.png`、`semester_rating_stack.png`：统计图
 - 默认不输出 CSV/JSON 明细；需要时使用 `--write-details`
 """
 
@@ -578,6 +655,10 @@ def write_markdown_report(
 
 {table(course_df, ["name", "teacher", "department", "review_count", "avg_review_rating"], limit=10)}
 
+## 评价最多的老师
+
+{table(teacher_df, ["teacher", "departments", "review_count", "avg_review_rating", "reviewed_courses"], limit=10)}
+
 ## 高频词
 
 {top_keywords}
@@ -601,6 +682,16 @@ def remove_detail_outputs(out_dir: Path) -> None:
             path.unlink()
 
 
+def remove_stale_figures(out_dir: Path) -> None:
+    for filename in STALE_FIGURE_FILES:
+        path = out_dir / filename
+        if path.exists():
+            path.unlink()
+    for pattern in STALE_FIGURE_PATTERNS:
+        for path in out_dir.glob(pattern):
+            path.unlink()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze Wulongcha course and review snapshots.")
     parser.add_argument("--courses", type=Path, default=default_path("courses"), help="Course JSON file.")
@@ -609,6 +700,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--assets-dir", type=Path, default=ASSETS_DIR, help="Optional Markdown assets for wordcloud.")
     parser.add_argument("--min-course-reviews", type=int, default=5, help="Minimum reviews for top-rated list.")
     parser.add_argument("--department-top-n", type=int, default=50, help="Number of departments shown in charts.")
+    parser.add_argument("--teacher-top-n", type=int, default=50, help="Number of teachers shown in charts.")
     parser.add_argument(
         "--write-details",
         action="store_true",
@@ -633,6 +725,7 @@ def main() -> None:
     category_df = build_category_stats(courses_df, ratings_df)
     semester_df = build_semester_stats(ratings_df)
     course_df = build_course_stats(ratings_df)
+    teacher_df = build_teacher_stats(ratings_df)
     asset_texts, asset_files = load_asset_markdown_texts(args.assets_dir)
     keywords = tokenize_comments([*ratings_df["comment"], *asset_texts])
 
@@ -641,6 +734,7 @@ def main() -> None:
         category_df.to_csv(args.out_dir / "category_stats.csv", index=False, encoding="utf-8-sig")
         semester_df.to_csv(args.out_dir / "semester_stats.csv", index=False, encoding="utf-8-sig")
         course_df.to_csv(args.out_dir / "course_rankings.csv", index=False, encoding="utf-8-sig")
+        teacher_df.to_csv(args.out_dir / "teacher_stats.csv", index=False, encoding="utf-8-sig")
 
         top_rated = course_df[course_df["review_count"] >= args.min_course_reviews].sort_values(
             ["avg_review_rating", "review_count"],
@@ -652,15 +746,28 @@ def main() -> None:
         keyword_df.to_csv(args.out_dir / "keyword_frequency.csv", index=False, encoding="utf-8-sig")
     else:
         remove_detail_outputs(args.out_dir)
+    remove_stale_figures(args.out_dir)
 
-    save_barh(
-        department_df,
+    save_group_rating_stack(
+        ratings_df,
         "department",
-        "review_count",
-        f"学院评价数量",
-        args.out_dir / f"department_review_count_top{args.department_top_n}.png",
+        "学院评价数量与星级结构",
+        args.out_dir / f"department_review_rating_stack_top{args.department_top_n}.png",
         top_n=args.department_top_n,
-        value_format="{:.0f}",
+        group_order=department_df[department_df["review_count"] > 0]["department"].astype(str).tolist(),
+    )
+    teacher_label_map = {
+        str(row["teacher"]): f"{row['teacher']}\n{row['departments']}"
+        for _, row in teacher_df.iterrows()
+    }
+    save_group_rating_stack(
+        ratings_df,
+        "teacher",
+        "教师评价数量与星级结构",
+        args.out_dir / f"teacher_review_rating_stack_top{args.teacher_top_n}.png",
+        top_n=args.teacher_top_n,
+        group_order=teacher_df[teacher_df["review_count"] > 0]["teacher"].astype(str).tolist(),
+        label_map=teacher_label_map,
     )
     rated_departments = department_df[department_df["review_count"] >= 10].sort_values(
         "avg_review_rating",
@@ -676,8 +783,7 @@ def main() -> None:
         value_format="{:.2f}",
         x_limit=5.35,
     )
-    save_semester_trend(semester_df, args.out_dir / "semester_trend.png")
-    save_rating_distribution(ratings_df, args.out_dir / "rating_distribution.png")
+    save_semester_rating_stack(ratings_df, args.out_dir / "semester_rating_stack.png")
     wordcloud_created = save_wordcloud(keywords, font_path, args.out_dir / "wordcloud.png")
 
     first_review = ratings_df["created_at_dt"].min()
@@ -698,6 +804,7 @@ def main() -> None:
         "font": str(font_path) if font_path else None,
         "wordcloud_created": wordcloud_created,
         "department_top_n": args.department_top_n,
+        "teacher_top_n": args.teacher_top_n,
         "wordcloud_asset_files": [str(path) for path in asset_files],
     }
     if args.write_details:
@@ -709,6 +816,7 @@ def main() -> None:
         category_df,
         semester_df,
         course_df,
+        teacher_df,
         keywords,
         wordcloud_created,
         args.write_details,
