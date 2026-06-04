@@ -1,5 +1,4 @@
 .browser-state/
-.venv/
 report/
 __pycache__/
 *.py[cod]
