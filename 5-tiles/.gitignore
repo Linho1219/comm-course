@@ -1,0 +1,5 @@
+venv/
+output/
+tiles/
+__pycache__/
+*.py[cod]
