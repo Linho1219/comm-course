@@ -5,4 +5,6 @@
   <Project Path="2-filesend-server/2-filesend-server.csproj" Id="c9f23ff9-93d3-4e80-93a9-51de846494d4" />
   <Project Path="6-serial-send/6-serial-send.csproj" Id="c10ae7d6-144d-4d1d-b9fc-5589e0a0a611" />
   <Project Path="6-serial-receive/6-serial-receive.csproj" Id="d9673cbf-f087-40e2-bc4c-26366cc19c1c" />
+  <Project Path="7-udp-send/7-udp-send.csproj" Id="a6b54629-9815-4d79-995d-91e3647de832" />
+  <Project Path="7-udp-receive/7-udp-receive.csproj" Id="17907b7b-5607-4f2a-8d2a-ee5a0658a457" />
 </Solution>
